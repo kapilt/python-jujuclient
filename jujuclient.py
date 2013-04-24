@@ -37,7 +37,6 @@ Example Usage::
 Todo
 
 - Provide a buffered in mem option with watches on a single conn.
-- Provide a timeout mechanism on watcher
 
 Upstream/Server
   - need proper status output, or other introspection beyond AllWatcher
@@ -49,8 +48,10 @@ Upstream/Server
 # License: GPL
 # Author: Kapil Thangavelu <kapil.foss@gmail.com>
 
+from contextlib import contextmanager
 import json
 import pprint
+import signal
 import StringIO
 
 import websocket
@@ -61,6 +62,14 @@ class AlreadyConnected(Exception):
 
 
 class LoginRequired(Exception):
+    pass
+
+
+class TimeoutError(StopIteration):
+    pass
+
+
+class TimeoutWatchInProgress(Exception):
     pass
 
 
@@ -92,7 +101,7 @@ class RPC(object):
         self.conn.send(json.dumps(op))
         raw = self.conn.recv()
         result = json.loads(raw)
-        print "raw", op['Request'], raw
+        #print "raw", op['Request'], raw
         if 'Error' in result:
             raise EnvError(result)
         return result['Response']
@@ -117,10 +126,11 @@ class Watcher(RPC):
     def next(self):
         if self.watcher_id is None:
             self.start()
-        return self._rpc({
+        result = self._rpc({
             'Type': 'AllWatcher',
             'Request': 'Next',
             'Id': self.watcher_id})
+        return result['Deltas']
 
     def stop(self):
         result = self._rpc({
@@ -132,6 +142,38 @@ class Watcher(RPC):
 
     def __iter__(self):
         return self
+
+
+class TimeoutWatcher(Watcher):
+    # A simple non concurrent watch using signals..
+
+    _timeout = None
+
+    def set_timeout(self, timeout):
+        self._timeout = timeout
+
+    def next(self):
+        with self._set_alarm(self._timeout):
+            return super(TimeoutWatcher, self).next()
+
+    @classmethod
+    @contextmanager
+    def _set_alarm(cls, timeout):
+        try:
+            handler = signal.getsignal(signal.SIGALRM)
+            if callable(handler):
+                if handler.__name__ == '_set_alarm':
+                    raise TimeoutWatchInProgress()
+                raise RuntimeError("Existing signal handler found %r" % handler)
+            signal.signal(signal.SIGALRM, cls._on_alarm)
+            signal.alarm(timeout)
+            yield None
+        finally:
+            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+
+    @classmethod
+    def _on_alarm(cls, x, frame):
+        raise TimeoutError()
 
 
 class Environment(RPC):
@@ -147,20 +189,6 @@ class Environment(RPC):
         else:
             self.conn = websocket.create_connection(endpoint)
 
-    def _rpc(self, op):
-        if not self._auth and not op.get("Request") == "Login":
-            raise LoginRequired()
-        if not 'Params' in op:
-            op['Params'] = {}
-        op['RequestId'] = self._request_id
-        self._request_id += 1
-        self.conn.send(json.dumps(op))
-        raw = self.conn.recv()
-        result = json.loads(raw)
-        if 'Error' in result:
-            raise EnvError(result)
-        return result['Response']
-
     def close(self):
         for w in self._watches:
             w.stop()
@@ -169,6 +197,7 @@ class Environment(RPC):
     def login(self, password, user="user-admin"):
         if self.conn and self.conn.connected and self._auth:
             raise AlreadyConnected()
+        # Store for constructing separate authenticated watch connections.
         self._creds = {'password': password, 'user': user}
         self._rpc({"Type": "Admin", "Request": "Login",
                    "Params": {"AuthTag": user, "Password": password}})
@@ -183,17 +212,23 @@ class Environment(RPC):
         # Status is currently broken, only reports machine ids.
         return self._rpc({"Type": "Client", "Request": "Status"})
 
-    def watch(self):
-        # separate conn per watcher to keep sync usage simple, else we have to
+    def get_watch(self, timeout=None):
+        # Separate conn per watcher to keep sync usage simple, else we have to
         # buffer watch results with requestid dispatch. At the moment
         # with the all watcher, an app only needs one watch, which likely to
         # change.
         watch_env = Environment(self.endpoint)
         watch_env.login(**self._creds)
-        watcher = Watcher(watch_env.conn)
+        if timeout is not None:
+            watcher = TimeoutWatcher(watch_env.conn)
+            watcher.set_timeout(timeout)
+        else:
+            watcher = Watcher(watch_env.conn)
         self._watches.append(watcher)
         watcher.start()
         return watcher
+
+    watch = get_watch
 
     def get_charm(self, charm_url):
         return self._rpc(
@@ -352,3 +387,37 @@ class Environment(RPC):
             "Request": "GetAnnotations",
             "Params": {
                 "Tag": "%s-%s" % (entity_type, entity.replace("/", "-"))}})
+
+
+def main():
+
+    import os
+    juju_url, juju_token = os.environ.get("JUJU_URL"), os.environ.get("JUJU_TOKEN")
+    if not juju_url or not juju_token:
+        raise ValueError("JUJU_URL and JUJU_TOKEN should be defined for tests.")
+    env = Environment(juju_url)
+    env.login(juju_token)
+    watcher = env.get_watch(timeout=3)
+
+    print "Env info", env.info()
+
+    for change_set in watcher:
+        for change in change_set:
+            print "state change", change
+
+    env.deploy("test-blog", "cs:wordpress")
+    env.deploy("test-db", "cs:mysql")
+    env.add_relation("test-db", "test-blog")
+    config = env.get_config("test-blog")
+
+    print "waiting for changes for 30s"
+    watcher.set_timeout(30)
+    for change_set in watcher:
+        for change in change_set:
+            print "state change", change
+
+    env.destroy_service('test-blog')
+    env.destroy_service('test-db')
+
+if __name__ == '__main__':
+    main()
