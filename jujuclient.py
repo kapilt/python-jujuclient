@@ -460,8 +460,8 @@ class WaitForUnits(object):
                 state['pending'] = [v]
         if not state['pending'] and not state['errors']:
             return True
-        if state['errors']:
-            raise UnitErrors(self.state['errors'])
+        if state['errors'] and not self.goal_state == "removed":
+            raise UnitErrors(state['errors'])
         return state['pending']
 
 
@@ -482,7 +482,7 @@ class StatusTranslator(object):
     skip_empty_keys = set(['StatusInfo', "Ports"])
 
     def run(self, watch):
-        self.data = {}
+        self.data = {'machines': {}, 'services': {}}
         with watch:
             change_set = watch.next()
             for change in change_set:
