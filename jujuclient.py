@@ -53,8 +53,11 @@ import json
 import pprint
 import signal
 import StringIO
-
+import logging
 import websocket
+
+
+websocket.logger = logging.getLogger("websocket")
 
 
 class AlreadyConnected(Exception):
@@ -71,6 +74,12 @@ class TimeoutError(StopIteration):
 
 class TimeoutWatchInProgress(Exception):
     pass
+
+
+class UnitErrors(Exception):
+
+    def __init__(self, errors):
+        self.errors = errors
 
 
 class EnvError(Exception):
@@ -103,6 +112,8 @@ class RPC(object):
         result = json.loads(raw)
         #print "raw", op['Request'], raw
         if 'Error' in result:
+            # The backend disconnects us on err, bug: http://pad.lv/1160971
+            self.conn.connected = False
             raise EnvError(result)
         return result['Response']
 
@@ -133,6 +144,8 @@ class Watcher(RPC):
         return result['Deltas']
 
     def stop(self):
+        if not self.conn.connected:
+            return
         result = self._rpc({
             'Type': 'AllWatcher',
             'Request': 'Stop',
@@ -142,6 +155,12 @@ class Watcher(RPC):
 
     def __iter__(self):
         return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc, v, t):
+        self.stop()
 
 
 class TimeoutWatcher(Watcher):
@@ -192,7 +211,8 @@ class Environment(RPC):
     def close(self):
         for w in self._watches:
             w.stop()
-        self.conn.close()
+        if self.conn.connected:
+            self.conn.close()
 
     def login(self, password, user="user-admin"):
         if self.conn and self.conn.connected and self._auth:
@@ -211,6 +231,17 @@ class Environment(RPC):
     def status(self):
         # Status is currently broken, only reports machine ids.
         return self._rpc({"Type": "Client", "Request": "Status"})
+
+    # Watch Wrapper methods
+    def get_stat(self):
+        """A status emulator using the watch api, returns immediately.
+        """
+        watch = self.get_watch()
+        return StatusTranslator().run(watch)
+
+    def wait_for_units(self, timeout=None, goal_state="started", callback=None):
+        watch = self.get_watch(timeout)
+        return WaitForUnits().run(watch, goal_state, callback=callback)
 
     def get_watch(self, timeout=None):
         # Separate conn per watcher to keep sync usage simple, else we have to
@@ -387,6 +418,135 @@ class Environment(RPC):
             "Request": "GetAnnotations",
             "Params": {
                 "Tag": "%s-%s" % (entity_type, entity.replace("/", "-"))}})
+
+
+# Unit tests for the watch wrappers are in lp:juju-deployer/darwin
+
+class WaitForUnits(object):
+    """
+    Wait for units of the environment to reach a particular goal state.
+    """
+    def run(self, watch, state='started', service=None, callback=None):
+        self.units = {}
+        self.goal_state = state
+        self.service = service
+        seen_initial = False
+
+        with watch:
+            while True:
+                change_set = watch.next()
+                for change in change_set:
+                    self.process(*change)
+                    if seen_initial and callable(callback):
+                        callback(*change)
+                if self.complete() is True:
+                    break
+                seen_initial = True
+
+    def process(self, entity_type, change, data):
+        if entity_type != "unit":
+            return
+        if change == "remove" and data['Name'] in self.units:
+            del self.units[data['Name']]
+        else:
+            self.units[data['Name']] = data
+
+    def complete(self):
+        state = {'pending': [], 'errors': []}
+        for k, v in self.units.items():
+            if v['Status'] == "error":
+                state['errors'] = [v]
+            elif v['Status'] != self.goal_state:
+                state['pending'] = [v]
+        if not state['pending'] and not state['errors']:
+            return True
+        if state['errors']:
+            raise UnitErrors(self.state['errors'])
+        return state['pending']
+
+
+class StatusTranslator(object):
+    """
+    Status emulation from watch api.
+    """
+
+    key_map = {
+        'InstanceId': 'instance-id',
+        'PublicAddress': 'public-address',
+        'Status': 'agent-state',
+        "MachineId": "Machine",
+        'CharmURL': 'charm',
+        "Number": 'port'
+    }
+    remove_keys = set(['Life', "PrivateAddress"])
+    skip_empty_keys = set(['StatusInfo', "Ports"])
+
+    def run(self, watch):
+        self.data = {}
+        with watch:
+            change_set = watch.next()
+            for change in change_set:
+                entity_type, change_kind, d = change
+                if entity_type == "machine":
+                    self._machine(d)
+                elif entity_type == "service":
+                    self._service(d)
+                elif entity_type == "unit":
+                    self._unit(d)
+                elif entity_type == "relation":
+                    self._relation(d)
+        result = dict(self.data)
+        self.data.clear()
+        return result
+
+    def _translate(self, d):
+        r = {}
+        for k, v in d.items():
+            if k in self.remove_keys:
+                continue
+            if k in self.skip_empty_keys and not v:
+                continue
+            tk = self.key_map.get(k, k)
+
+            r[tk.lower()] = v
+        return r
+
+    def _machine(self, d):
+        mid = d.pop('Id')
+        self.data.setdefault('machines', {})[mid] = self._translate(d)
+
+    def _unit(self, d):
+        svc_units = self.data.setdefault("services", {}).setdefault(
+            d['Service'], {}).setdefault('units', {})
+        d.pop("Service")
+        d.pop("Series")
+        d.pop("CharmURL")
+        name = d.pop('Name')
+        ports = d.pop('Ports')
+        tports = d.setdefault('Ports', [])
+        for p in ports:
+            tports.append(self._translate(p))
+
+        svc_units[name] = self._translate(d)
+
+    def _service(self, d):
+        d.pop('Config')
+        d.pop('Constraints')
+        name = d.pop('Name')
+        svc = self.data.setdefault('services', {}).setdefault(name, {})
+        svc.update(self._translate(d))
+
+    def _relation(self, d):
+        d['Endpoints'][0]['RemoteService'] = d['Endpoints'][0]['ServiceName']
+        if len(d['Endpoints']) != 1:
+            d['Endpoints'][1]["RemoteService"] = d['Endpoints'][0]['ServiceName']
+            d['Endpoints'][0]["RemoteService"] = d['Endpoints'][1]['ServiceName']
+        for ep in d['Endpoints']:
+            svc_rels = self.data.setdefault(
+                'services', {}).setdefault(
+                    ep['ServiceName'], {}).setdefault(
+                        'relations', {})
+            svc_rels.setdefault(ep['Relation']['Name'], []).append(ep['RemoteService'])
 
 
 def main():
