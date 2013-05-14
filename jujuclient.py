@@ -110,8 +110,9 @@ class RPC(object):
         self.conn.send(json.dumps(op))
         raw = self.conn.recv()
         result = json.loads(raw)
-        #print "raw", op['Request'], raw
+
         if 'Error' in result:
+            # print "raw", op['Request'], raw
             # The backend disconnects us on err, bug: http://pad.lv/1160971
             self.conn.connected = False
             raise EnvError(result)
@@ -206,7 +207,8 @@ class Environment(RPC):
         if conn is not None:
             self.conn = conn
         else:
-            self.conn = websocket.create_connection(endpoint)
+            self.conn = websocket.create_connection(
+                endpoint, origin=self.endpoint)
 
     def close(self):
         for w in self._watches:
