@@ -56,6 +56,16 @@ import StringIO
 import logging
 import websocket
 
+# There are two pypi modules with the name websocket (python-websocket
+# and websocket) We utilize python-websocket, sniff and error if we
+# find the wrong one.
+try:
+    websocket.create_connection
+except AttributeError:
+    raise RuntimeError(
+        "Expected 'python-websocket' egg "
+        "found incompatible gevent 'websocket' egg")
+
 
 websocket.logger = logging.getLogger("websocket")
 
@@ -248,8 +258,8 @@ class Environment(RPC):
     def get_watch(self, timeout=None):
         # Separate conn per watcher to keep sync usage simple, else we have to
         # buffer watch results with requestid dispatch. At the moment
-        # with the all watcher, an app only needs one watch, which likely to
-        # change.
+        # with the all watcher, an app only needs one watch, which is likely to
+        # change to discrete watches on individual bits.
         watch_env = Environment(self.endpoint)
         watch_env.login(**self._creds)
         if timeout is not None:
@@ -300,7 +310,8 @@ class Environment(RPC):
             }})
 
     # Service
-    def deploy(self, service_name, charm_url, num_units=1, config=None, constraints=None):
+    def deploy(self, service_name, charm_url, num_units=1,
+               config=None, constraints=None):
         """
         """
         svc_config = {}
@@ -331,19 +342,36 @@ class Environment(RPC):
                 "ServiceName": service_name,
                 "Options": svc_config}})
 
-    def get_config(self, service_name):
+    def get_service(self, service_name):
+        """Returns dict of Charm, Config, Constraints, Service keys.
+
+        Charm -> charm used by service
+        Service -> service name
+        Config -> Currently configured options and descriptions
+        Constraints -> Constraints set on service (not environment inherited).
+        """
         return self._rpc(
             {"Type": "Client",
              "Request": "ServiceGet",
              "Params": {
                  "ServiceName": service_name}})
 
+    def get_config(self, service_name):
+        """Returns dict of Charm, Config, Constraints, Service keys.
+
+        Charm -> charm used by service
+        Service -> service name
+        Config -> Currently configured options and descriptions
+        Constraints -> Constraints set on service (not environment inherited).
+        """
+        return self.get_info(service_name)['Config']
+
     def get_constraints(self, service_name):
         return self._rpc(
             {"Type": "Client",
              "Request": "GetServiceConstraints",
              "Params": {
-                 "ServiceName": service_name}})
+                 "ServiceName": service_name}})['Constraints']
 
     def set_constraints(self, service_name, constraints):
         return self._rpc(

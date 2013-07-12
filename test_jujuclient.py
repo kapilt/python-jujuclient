@@ -1,10 +1,42 @@
+import unittest
+import os
+from jujuclient import Environment
+
+ENDPOINT = os.environ.get("JUJU_ENDPOINT")
+AUTH = os.environ.get("JUJU_AUTH")
 
 
-class UnitTest(object):
+class ClientFuncTest(unittest.TestCase):
 
+    def setUp(self):
+        self.client = Environment(ENDPOINT)
+        self.client.login(AUTH)
+
+    def tearDown(self):
+        self.client.close()
+        self.client = None
+
+    def test_juju_info(self):
+        self.assertEqual(
+            self.client.info(),
+            {'DefaultSeries': 'precise',
+             'Name': 'iaas-stage',
+             'ProviderType': 'ec2'})
 
     def test_deploy_and_destroy(self):
-        pass
+        self.assert_not_service('db')
+        self.client.deploy('db', 'precise/mysql')
+        self.assert_service('db')
+
+    def assert_service(self, svc_name):
+        status = self.client.status()
+        self.assertTrue(svc_name in [
+            svc.get('Name') for svc in status.get('Services', ())])
+
+    def assert_not_service(self, svc_name):
+        status = self.client.status()
+        self.assertTrue(svc_name not in [
+            svc.get('Name') for svc in status.get('Services', ())])
 
     def test_expose_unexpose(self):
         pass
@@ -30,3 +62,6 @@ class UnitTest(object):
     def test_info(self):
         pass
 
+
+if __name__ == '__main__':
+    unittest.main()
