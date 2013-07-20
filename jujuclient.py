@@ -136,6 +136,10 @@ class Watcher(RPC):
     def __init__(self, conn):
         self.conn = conn
         self.watcher_id = None
+        self.running = False
+
+        # For debugging, attach the wrapper
+        self.context = None
 
     def start(self):
         result = self._rpc({
@@ -143,11 +147,14 @@ class Watcher(RPC):
             'Request': 'WatchAll',
             'Params': {}})
         self.watcher_id = result['AllWatcherId']
+        self.running = True
         return result
 
     def next(self):
         if self.watcher_id is None:
             self.start()
+        if not self.running:
+            raise StopIteration("Stopped")
         result = self._rpc({
             'Type': 'AllWatcher',
             'Request': 'Next',
@@ -162,7 +169,12 @@ class Watcher(RPC):
             'Request': 'Stop',
             'Id': self.watcher_id})
         self.conn.close()
+        self.running = False
         return result
+
+    def set_context(self, context):
+        self.context = context
+        return self
 
     def __iter__(self):
         return self
@@ -194,7 +206,8 @@ class TimeoutWatcher(Watcher):
             if callable(handler):
                 if handler.__name__ == '_set_alarm':
                     raise TimeoutWatchInProgress()
-                raise RuntimeError("Existing signal handler found %r" % handler)
+                raise RuntimeError(
+                    "Existing signal handler found %r" % handler)
             signal.signal(signal.SIGALRM, cls._on_alarm)
             signal.alarm(timeout)
             yield None
@@ -251,9 +264,20 @@ class Environment(RPC):
         watch = self.get_watch()
         return StatusTranslator().run(watch)
 
-    def wait_for_units(self, timeout=None, goal_state="started", callback=None):
+    def wait_for_units(
+            self, timeout=None, goal_state="started", callback=None):
+        """Wait for all units to reach a given state.
+
+        Any unit errors will cause an exception to be raised.
+        """
         watch = self.get_watch(timeout)
-        return WaitForUnits().run(watch, goal_state, callback=callback)
+        return WaitForUnits(watch, goal_state).run(callback)
+
+    def wait_for_no_machines(self, timeout, callback=None):
+        """For unit tests doing teardowns, or deployer during reset.
+        """
+        watch = self.get_watch(timeout)
+        return WaitForNoMachines(watch).run(callback)
 
     def get_watch(self, timeout=None):
         # Separate conn per watcher to keep sync usage simple, else we have to
@@ -451,27 +475,40 @@ class Environment(RPC):
 
 
 # Unit tests for the watch wrappers are in lp:juju-deployer/darwin
+class WatchWrapper(object):
 
-class WaitForUnits(object):
-    """
-    Wait for units of the environment to reach a particular goal state.
-    """
-    def run(self, watch, state='started', service=None, callback=None):
-        self.units = {}
-        self.goal_state = state
-        self.service = service
+    def __init__(self, watch):
+        self.watch = watch
+
+    def run(self, callback=None):
         seen_initial = False
-
-        with watch:
-            while True:
-                change_set = watch.next()
+        with self.watch.set_context(self):
+            for change_set in self.watch:
                 for change in change_set:
                     self.process(*change)
                     if seen_initial and callable(callback):
                         callback(*change)
                 if self.complete() is True:
+                    self.watch.stop()
                     break
                 seen_initial = True
+
+    def process(self):
+        """process watch events."""
+
+    def complete(self):
+        """watch wrapper complete """
+
+
+class WaitForUnits(WatchWrapper):
+    """
+    Wait for units of the environment to reach a particular goal state.
+    """
+    def __init__(self, watch, state='started', service=None):
+        super(WaitForUnits, self).__init__(watch)
+        self.units = {}
+        self.goal_state = state
+        self.service = service
 
     def process(self, entity_type, change, data):
         if entity_type != "unit":
@@ -493,6 +530,28 @@ class WaitForUnits(object):
         if state['errors'] and not self.goal_state == "removed":
             raise UnitErrors(state['errors'])
         return state['pending']
+
+
+class WaitForNoMachines(WatchWrapper):
+    """
+    Wait for all non state servers to be terminated.
+    """
+
+    def __init__(self, watch):
+        super(WaitForNoMachines, self).__init__(watch)
+        self.machines = {}
+
+    def process(self, entity_type, change, data):
+        if entity_type != 'machine':
+            return
+        if change == 'remove' and data['Id'] in self.machines:
+            del self.machines[data['Id']]
+        else:
+            self.machines[data['Id']] = data
+
+    def complete(self):
+        if self.machines.keys() == ['0']:
+            return True
 
 
 class StatusTranslator(object):
@@ -569,22 +628,27 @@ class StatusTranslator(object):
     def _relation(self, d):
         d['Endpoints'][0]['RemoteService'] = d['Endpoints'][0]['ServiceName']
         if len(d['Endpoints']) != 1:
-            d['Endpoints'][1]["RemoteService"] = d['Endpoints'][0]['ServiceName']
-            d['Endpoints'][0]["RemoteService"] = d['Endpoints'][1]['ServiceName']
+            d['Endpoints'][1]["RemoteService"] = d[
+                'Endpoints'][0]['ServiceName']
+            d['Endpoints'][0]["RemoteService"] = d[
+                'Endpoints'][1]['ServiceName']
         for ep in d['Endpoints']:
             svc_rels = self.data.setdefault(
                 'services', {}).setdefault(
                     ep['ServiceName'], {}).setdefault(
                         'relations', {})
-            svc_rels.setdefault(ep['Relation']['Name'], []).append(ep['RemoteService'])
+            svc_rels.setdefault(
+                ep['Relation']['Name'], []).append(ep['RemoteService'])
 
 
 def main():
-
     import os
-    juju_url, juju_token = os.environ.get("JUJU_URL"), os.environ.get("JUJU_TOKEN")
+    juju_url, juju_token = (
+        os.environ.get("JUJU_URL"),
+        os.environ.get("JUJU_TOKEN"))
     if not juju_url or not juju_token:
-        raise ValueError("JUJU_URL and JUJU_TOKEN should be defined for tests.")
+        raise ValueError(
+            "JUJU_URL and JUJU_TOKEN should be defined for tests.")
     env = Environment(juju_url)
     env.login(juju_token)
     watcher = env.get_watch(timeout=3)
