@@ -69,6 +69,8 @@ except AttributeError:
 
 websocket.logger = logging.getLogger("websocket")
 
+log = logging.getLogger("jujuclient")
+
 
 class AlreadyConnected(Exception):
     pass
@@ -109,6 +111,7 @@ class RPC(object):
 
     _auth = False
     _request_id = 0
+    _debug = False
 
     def _rpc(self, op):
         if not self._auth and not op.get("Request") == "Login":
@@ -117,9 +120,13 @@ class RPC(object):
             op['Params'] = {}
         op['RequestId'] = self._request_id
         self._request_id += 1
+        if self._debug:
+            log.debug("rpc request:\n%s" % (json.dumps(op, indent=2)))
         self.conn.send(json.dumps(op))
         raw = self.conn.recv()
         result = json.loads(raw)
+        if self._debug:
+            log.debug("rpc response:\n%s" % (json.dumps(result, indent=2)))
 
         if 'Error' in result:
             # print "raw", op['Request'], raw
@@ -336,7 +343,9 @@ class Environment(RPC):
     # Service
     def deploy(self, service_name, charm_url, num_units=1,
                config=None, constraints=None):
-        """
+        """Deploy a charm
+
+        Does not support local charms
         """
         svc_config = {}
         if config:
@@ -388,7 +397,7 @@ class Environment(RPC):
         Config -> Currently configured options and descriptions
         Constraints -> Constraints set on service (not environment inherited).
         """
-        return self.get_info(service_name)['Config']
+        return self.get_service(service_name)['Config']
 
     def get_constraints(self, service_name):
         return self._rpc(
