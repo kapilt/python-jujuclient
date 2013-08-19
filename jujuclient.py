@@ -45,7 +45,7 @@ Upstream/Server
   - need terminate machine api
   - clarify usage/working of env annotation
 """
-# License: GPL
+# License: GPLv3
 # Author: Kapil Thangavelu <kapil.foss@gmail.com>
 
 from contextlib import contextmanager
