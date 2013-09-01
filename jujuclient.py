@@ -574,9 +574,10 @@ class StatusTranslator(object):
         'Status': 'agent-state',
         "MachineId": "Machine",
         'CharmURL': 'charm',
+        'StatusInfo': 'agent-state-info',
         "Number": 'port'
     }
-    remove_keys = set(['Life', "PrivateAddress"])
+    remove_keys = set(['Life', "PrivateAddress", "MinUnits"])
     skip_empty_keys = set(['StatusInfo', "Ports"])
 
     def run(self, watch):
