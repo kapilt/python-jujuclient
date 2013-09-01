@@ -286,18 +286,26 @@ class Environment(RPC):
         watch = self.get_watch(timeout)
         return WaitForNoMachines(watch).run(callback)
 
-    def get_watch(self, timeout=None):
+    def get_watch(self, timeout=None, connection=None, watch_class=None):
         # Separate conn per watcher to keep sync usage simple, else we have to
         # buffer watch results with requestid dispatch. At the moment
         # with the all watcher, an app only needs one watch, which is likely to
         # change to discrete watches on individual bits.
-        watch_env = Environment(self.endpoint)
-        watch_env.login(**self._creds)
+        if connection is None:
+            watch_env = Environment(self.endpoint)
+            watch_env.login(**self._creds)
+        else:
+            watch_env = connection
+
         if timeout is not None:
-            watcher = TimeoutWatcher(watch_env.conn)
+            if watch_class is None:
+                watch_class = TimeoutWatcher
+            watcher = watch_class(watch_env.conn)
             watcher.set_timeout(timeout)
         else:
-            watcher = Watcher(watch_env.conn)
+            if watch_class is None:
+                watch_class = Watcher
+            watcher = watch_class(watch_env.conn)
         self._watches.append(watcher)
         watcher.start()
         return watcher
@@ -575,7 +583,8 @@ class StatusTranslator(object):
         "MachineId": "Machine",
         'CharmURL': 'charm',
         'StatusInfo': 'agent-state-info',
-        "Number": 'port'
+        "Number": 'port',
+        "Ports": "open-ports"
     }
     remove_keys = set(['Life', "PrivateAddress", "MinUnits"])
     skip_empty_keys = set(['StatusInfo', "Ports"])
@@ -624,8 +633,7 @@ class StatusTranslator(object):
         ports = d.pop('Ports')
         tports = d.setdefault('Ports', [])
         for p in ports:
-            tports.append(self._translate(p))
-
+            tports.append("%s/%s" % (p['Number'], p['Protocol']))
         svc_units[name] = self._translate(d)
 
     def _service(self, d):
