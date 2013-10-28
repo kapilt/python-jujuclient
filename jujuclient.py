@@ -452,6 +452,18 @@ class Environment(RPC):
                 "ServiceName": service_name,
                 "NumUnits": num_units}})
 
+    def add_unit(self, service_name, machine_spec=None):
+        params = {
+            "ServiceName": service_name}
+        if machine_spec:
+            params["ToMachineSpec"] = machine_spec
+        else:
+            params["NumUnits"] = 1
+        return self._rpc({
+            "Type": "Client",
+            "Request": "AddServiceUnits",
+            "Params": params})
+
     def remove_units(self, unit_names):
         return self._rpc({
             "Type": "Client",
@@ -680,7 +692,6 @@ def main():
     env.deploy("test-blog", "cs:wordpress")
     env.deploy("test-db", "cs:mysql")
     env.add_relation("test-db", "test-blog")
-    config = env.get_config("test-blog")
 
     print "waiting for changes for 30s"
     watcher.set_timeout(30)
