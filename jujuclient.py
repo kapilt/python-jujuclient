@@ -454,11 +454,10 @@ class Environment(RPC):
 
     def add_unit(self, service_name, machine_spec=None):
         params = {
-            "ServiceName": service_name}
+            "ServiceName": service_name,
+            "NumUnits": 1}
         if machine_spec:
             params["ToMachineSpec"] = machine_spec
-        else:
-            params["NumUnits"] = 1
         return self._rpc({
             "Type": "Client",
             "Request": "AddServiceUnits",
