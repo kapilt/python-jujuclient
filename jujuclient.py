@@ -4,7 +4,7 @@ Juju Client
 
 Seriously Alpha. Works now, but API *will* change.
 
-A simple synchronous python client for the juju-core/gojuju websocket api.
+A simple synchronous python client for the juju-core websocket api.
 
 Example Usage::
 
@@ -42,6 +42,7 @@ Upstream/Server
   - need proper status output, or other introspection beyond AllWatcher
   - deploy local charm
   - bad constraints fail silently
+
   - need terminate machine api
   - clarify usage/working of env annotation
 """
@@ -99,12 +100,21 @@ class EnvError(Exception):
     def __init__(self, error):
         self.error = error
         self.message = error['Error']
+        # Call the base class initializer so that this exception can be pickled
+        # (see http://bugs.python.org/issue1692335).
+        super(EnvError, self).__init__(error)
 
     def __str__(self):
         stream = StringIO.StringIO()
         pprint.pprint(self.error, stream, indent=4)
         return "<Env Error - Details:\n %s >" % (
             stream.getvalue())
+
+
+class Jobs(object):
+    HostUnits = "JobHostUnits"
+    ManageEnviron = "JobManageEnviron"
+    ManageState = "JobManageState"
 
 
 class RPC(object):
@@ -246,6 +256,7 @@ class Environment(RPC):
         if self.conn.connected:
             self.conn.close()
 
+    # Environment operations
     def login(self, password, user="user-admin"):
         if self.conn and self.conn.connected and self._auth:
             raise AlreadyConnected()
@@ -261,8 +272,122 @@ class Environment(RPC):
             "Request": "EnvironmentInfo"})
 
     def status(self):
-        # Status is currently broken, only reports machine ids.
+        # Status via api is currently broken, only reports machine ids,
+        # use an all watch with status translator to get something usable.
         return self._rpc({"Type": "Client", "Request": "Status"})
+
+    def get_charm(self, charm_url):
+        return self._rpc(
+            {"Type": "Client",
+             "Request": "CharmInfo",
+             "Params": {
+                 "CharmURL": charm_url}})
+
+    # Environment
+    def get_env_constraints(self):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "GetEnvironmentConstraints"})
+
+    def set_env_constraints(self, constraints):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "SetEnvironmentConstraints",
+            "Params": {}})
+
+    def get_env_config(self):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "EnvironmentGet"})
+
+    def set_env_config(self, config):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "EnvironmentSet",
+            "Params": {"Config": config}})
+
+    # Machine ops
+    def add_machine(self, series="", constraints=None,
+                    machine_spec="", parent_id="", container_type=""):
+
+        """Allocate a new machine from the iaas provider.
+        """
+        if machine_spec:
+            err_msg = "Cant specify machine spec with container_type/parent_id"
+            assert not (parent_id or container_type), err_msg
+            parent_id, container_type = machine_spec.split(":", 1)
+
+        params = dict(
+            Series=series,
+            Constraints=self._prepare_constraints(constraints),
+            ContainerType=container_type,
+            ParentId=parent_id,
+            Jobs=[Jobs.HostUnits])
+        return self.add_machines([params])['Machines'][0]
+
+    def add_machines(self, machines):
+        """Allocate multiple machines from the iaas provider.
+
+        See add_machine for format of parameters.
+        """
+        return self._rpc({
+            "Type": "Client",
+            "Request": "AddMachines",
+            "Params": {
+                "MachineParams": machines}})
+
+    def register_machine(self, instance_id, nonce, series, hardware, addrs):
+        """Register/Enlist a machine into an environment state.
+
+        The machine will need to have tools installed and subsequently
+        connect to the state server with the given nonce
+        credentials. The machine_config method can be used to
+        construct a suitable set of commands.
+
+        Parameters:
+
+        nonce: is the initial password for the new machine.
+        addrs: list of ip addresses for the machine.
+        hw: is the hardware characterstics of the machine, applicable keys.
+         - Arch
+         - Mem
+         - RootDisk size
+         - CpuCores
+         - CpuPower
+         - Tags
+        """
+        params = dict(
+            Series=series,
+            InstanceId=instance_id,
+            Jobs=[Jobs.HostUnits],
+            HardwareCharacteristics=hardware,
+            Addrs=addrs,
+            Nonce=nonce)
+        return self._register_machines([params])['Machines'][0]
+
+    def register_machines(self, machines):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "InjectMachines",
+            "Params": {
+                "MachineParams": machines}})
+
+    def destroy_machines(self, machine_ids):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "DestroyMachines",
+            "Params": {"MachineNames": machine_ids}})
+
+    def machine_config(self, machine_id, series, arch):
+        """Return information needed to render cloudinit for a machine.
+        """
+        return self._rpc({
+            "Type": "Client",
+            "Request": "MachineConfig",
+            "Params": {
+                "MachineId": machine_id,
+                "Series": series,
+                "Arch": arch}})
 
     # Watch Wrapper methods
     def get_stat(self):
@@ -312,13 +437,6 @@ class Environment(RPC):
 
     watch = get_watch
 
-    def get_charm(self, charm_url):
-        return self._rpc(
-            {"Type": "Client",
-             "Request": "CharmInfo",
-             "Params": {
-                 "CharmURL": charm_url}})
-
     def _prepare_strparams(self, d):
         r = {}
         for k, v in d.items():
@@ -350,7 +468,7 @@ class Environment(RPC):
 
     # Service
     def deploy(self, service_name, charm_url, num_units=1,
-               config=None, constraints=None):
+               config=None, constraints=None, machine_spec=None):
         """Deploy a charm
 
         Does not support local charms
@@ -371,7 +489,8 @@ class Environment(RPC):
                  "CharmURL": charm_url,
                  "NumUnits": num_units,
                  "Config": svc_config,
-                 "Constraints": svc_constraints}})
+                 "Constraints": svc_constraints,
+                 "ToMachineSpec": machine_spec}})
 
     def set_config(self, service_name, config):
         assert isinstance(config, dict)
@@ -382,6 +501,27 @@ class Environment(RPC):
             "Params": {
                 "ServiceName": service_name,
                 "Options": svc_config}})
+
+    def unset_config(self, service_name, config_keys):
+        """Unset configuration values of a service to restore charm defaults.
+        """
+        return self._rpc({
+            "Type": "Client",
+            "Request": "ServiceUnset",
+            "Params": {
+                "ServiceName": service_name,
+                "Options": config_keys}})
+
+    def set_charm(self, service_name, charm_url, force=False):
+        """Set the charm url for a service.
+        """
+        return self._rpc({
+            "Type": "Client",
+            "Request": "ServiceSetCharm",
+            "Params": {
+                "ServiceName": service_name,
+                "CharmUrl": charm_url,
+                "Force": force}})
 
     def get_service(self, service_name):
         """Returns dict of Charm, Config, Constraints, Service keys.
@@ -398,12 +538,7 @@ class Environment(RPC):
                  "ServiceName": service_name}})
 
     def get_config(self, service_name):
-        """Returns dict of Charm, Config, Constraints, Service keys.
-
-        Charm -> charm used by service
-        Service -> service name
-        Config -> Currently configured options and descriptions
-        Constraints -> Constraints set on service (not environment inherited).
+        """Returns service configuration.
         """
         return self.get_service(service_name)['Config']
 
@@ -420,6 +555,27 @@ class Environment(RPC):
              "Request": "SetServiceConstraints",
              "Params": {
                  "ServiceName": service_name,
+                 "Constraints": self._prepare_constraints(constraints)}})
+
+    def update_service(self, service_name, charm_url="", force_charm_url=False,
+                       min_units=None, settings=None, constraints=None):
+        """Update a service.
+
+        Can update a service's charm, modify configuration, constraints,
+        and the number of units.
+        """
+        svc_config = {}
+        if settings:
+            svc_config = self._prepare_strparams(settings)
+
+        return self._rpc(
+            {"Type": "Client",
+             "Request": "SetServiceConstraints",
+             "Params": {
+                 "ServiceName": service_name,
+                 "CharmUrl": charm_url,
+                 "MinUnits": min_units,
+                 "SettingsStrings": svc_config,
                  "Constraints": self._prepare_constraints(constraints)}})
 
     def destroy_service(self, service_name):
@@ -440,6 +596,17 @@ class Environment(RPC):
         return self._rpc({
             "Type": "Client",
             "Request": "ServiceUnexpose",
+            "Params": {
+                "ServiceName": service_name}})
+
+    def valid_relation_names(self, service_name):
+        """All possible relation names of a service.
+
+        Per its charm metadata.
+        """
+        return self._rpc({
+            "Type": "Client",
+            "Request": "ServiceCharmRelations",
             "Params": {
                 "ServiceName": service_name}})
 
@@ -477,6 +644,15 @@ class Environment(RPC):
             "Params": {
                 "UnitName": unit_name,
                 "Retry": retry}})
+
+    # Multi-context
+    def get_public_address(self, target):
+        # Return the public address of the machine or unit.
+        return self._rpc({
+            "Type": "Client",
+            "Request": "PublicAddress",
+            "Params": {
+                "Target": target}})
 
     # Annotations
     def set_annotation(self, entity, entity_type, annotation):
