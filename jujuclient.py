@@ -49,7 +49,10 @@ Upstream/Server
 # License: GPLv3
 # Author: Kapil Thangavelu <kapil.foss@gmail.com>
 
+from base64 import b64encode
 from contextlib import contextmanager
+
+import httplib
 import json
 import pprint
 import signal
@@ -256,6 +259,37 @@ class Environment(RPC):
         if self.conn.connected:
             self.conn.close()
 
+    # Charm ops
+    def add_local_charm(self, charm_file, series, size=None):
+        """Add a local charm to an environment.
+
+        Uses an https endpoint at the same host:port as the wss.
+        Supports large file uploads.
+        """
+        endpoint = self.endpoint.replace('wss://', '')
+        host, port = endpoint.split(':')
+        conn = httplib.HTTPSConnection(host, port)
+        path = "/charms?series=%s" % (series)
+        headers = {
+            'Content-Type': 'application/zip',
+            'Authorization': 'Basic %s' % b64encode(
+                '%(user)s:%(password)s' % (self._creds))}
+        # Specify if its a psuedo-file object,
+        # httplib will try to stat non strings.
+        if size:
+            headers['Content-Length'] = size
+        conn.request("POST", path, charm_file, headers)
+        response = conn.getresponse()
+        result = json.loads(response.read())
+        if not response.status == 200:
+            raise EnvError(result)
+        return result
+
+    def add_charm(self, charm_url):
+        self._rpc({"Type": "Client",
+                   "Request": "AddCharm",
+                   "Params": {"URL": charm_url}})
+
     # Environment operations
     def login(self, password, user="user-admin"):
         if self.conn and self.conn.connected and self._auth:
@@ -363,7 +397,7 @@ class Environment(RPC):
             HardwareCharacteristics=hardware,
             Addrs=addrs,
             Nonce=nonce)
-        return self._register_machines([params])['Machines'][0]
+        return self.register_machines([params])['Machines'][0]
 
     def register_machines(self, machines):
         return self._rpc({
@@ -377,6 +411,15 @@ class Environment(RPC):
             "Type": "Client",
             "Request": "DestroyMachines",
             "Params": {"MachineNames": machine_ids}})
+
+    def provisioning_script(self, machine_id, nonce, data_dir="/var/lib/juju"):
+        return self._rpc({
+            "Type": "Client",
+            "Request": "ProvisioningScript",
+            "Params": {
+                "MachineId": machine_id,
+                "Nonce": nonce,
+                "DataDir": data_dir}})
 
     def machine_config(self, machine_id, series, arch):
         """Return information needed to render cloudinit for a machine.
@@ -646,6 +689,7 @@ class Environment(RPC):
                 "Retry": retry}})
 
     # Multi-context
+
     def get_public_address(self, target):
         # Return the public address of the machine or unit.
         return self._rpc({
