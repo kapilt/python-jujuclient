@@ -286,9 +286,10 @@ class Environment(RPC):
         return result
 
     def add_charm(self, charm_url):
-        self._rpc({"Type": "Client",
-                   "Request": "AddCharm",
-                   "Params": {"URL": charm_url}})
+        return self._rpc(
+            {"Type": "Client",
+             "Request": "AddCharm",
+             "Params": {"URL": charm_url}})
 
     # Environment operations
     def login(self, password, user="user-admin"):
@@ -406,11 +407,14 @@ class Environment(RPC):
             "Params": {
                 "MachineParams": machines}})
 
-    def destroy_machines(self, machine_ids):
+    def destroy_machines(self, machine_ids, force=False):
+        params = {"MachineNames": machine_ids}
+        if force:
+            params["Force"] = True
         return self._rpc({
             "Type": "Client",
             "Request": "DestroyMachines",
-            "Params": {"MachineNames": machine_ids}})
+            "Params": params})
 
     def provisioning_script(self, machine_id, nonce, data_dir="/var/lib/juju"):
         return self._rpc({
