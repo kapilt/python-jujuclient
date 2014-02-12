@@ -416,14 +416,16 @@ class Environment(RPC):
             "Request": "DestroyMachines",
             "Params": params})
 
-    def provisioning_script(self, machine_id, nonce, data_dir="/var/lib/juju"):
+    def provisioning_script(self, machine_id, nonce,
+                            data_dir="/var/lib/juju", disable_apt=False):
         return self._rpc({
             "Type": "Client",
             "Request": "ProvisioningScript",
             "Params": {
                 "MachineId": machine_id,
                 "Nonce": nonce,
-                "DataDir": data_dir}})
+                "DataDir": data_dir,
+                "DisablePackageCommands": disable_apt}})
 
     def machine_config(self, machine_id, series, arch):
         """Return information needed to render cloudinit for a machine.
