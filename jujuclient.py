@@ -153,11 +153,11 @@ class Watcher(RPC):
 
     _auth = True
 
-    def __init__(self, conn):
+    def __init__(self, conn, auto_reconnect=True):
         self.conn = conn
         self.watcher_id = None
         self.running = False
-
+        self.auto_reconnect = auto_reconnect
         # For debugging, attach the wrapper
         self.context = None
 
@@ -175,10 +175,16 @@ class Watcher(RPC):
             self.start()
         if not self.running:
             raise StopIteration("Stopped")
-        result = self._rpc({
-            'Type': 'AllWatcher',
-            'Request': 'Next',
-            'Id': self.watcher_id})
+        try:
+            result = self._rpc({
+                'Type': 'AllWatcher',
+                'Request': 'Next',
+                'Id': self.watcher_id})
+        except EnvError, e:
+            if "state watcher was stopped" in e.message:
+                if not self.auto_reconnect:
+                    raise
+                return self._reconnect().next()
         return result['Deltas']
 
     def stop(self):
@@ -194,6 +200,12 @@ class Watcher(RPC):
 
     def set_context(self, context):
         self.context = context
+        return self
+
+    def _reconnect(self):
+        self.conn.close()
+        self.conn.connect()
+        self.start()
         return self
 
     def __iter__(self):
