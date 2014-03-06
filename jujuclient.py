@@ -148,6 +148,18 @@ class RPC(object):
             raise EnvError(result)
         return result['Response']
 
+    def login(self, password, user="user-admin", **ignore):
+        """Login gets shared to watchers for reconnect."""
+        if self.conn and self.conn.connected and self._auth:
+            raise AlreadyConnected()
+        # Store for constructing separate authenticated watch connections.
+        self._creds = {'password': password, 'user': user}
+        result = self._rpc(
+            {"Type": "Admin", "Request": "Login",
+             "Params": {"AuthTag": user, "Password": password}})
+        self._auth = True
+        return result
+
 
 class Watcher(RPC):
 
@@ -184,7 +196,9 @@ class Watcher(RPC):
             if "state watcher was stopped" in e.message:
                 if not self.auto_reconnect:
                     raise
-                return self._reconnect().next()
+                if not self._reconnect():
+                    raise
+                return self.next()
         return result['Deltas']
 
     def stop(self):
@@ -204,7 +218,12 @@ class Watcher(RPC):
 
     def _reconnect(self):
         self.conn.close()
-        self.conn.connect()
+        params = getattr(
+            self.conn, 'reconnect_params', None)
+        if not params:
+            return False
+        self.conn.connect(**params)
+        self.login(**params)
         self.start()
         return self
 
@@ -304,15 +323,6 @@ class Environment(RPC):
              "Params": {"URL": charm_url}})
 
     # Environment operations
-    def login(self, password, user="user-admin"):
-        if self.conn and self.conn.connected and self._auth:
-            raise AlreadyConnected()
-        # Store for constructing separate authenticated watch connections.
-        self._creds = {'password': password, 'user': user}
-        self._rpc({"Type": "Admin", "Request": "Login",
-                   "Params": {"AuthTag": user, "Password": password}})
-        self._auth = True
-
     def info(self):
         return self._rpc({
             "Type": "Client",
@@ -482,6 +492,11 @@ class Environment(RPC):
             watch_env.login(**self._creds)
         else:
             watch_env = connection
+
+        watch_env.conn.reconnect_params = p = {
+            'url': self.endpoint,
+            'origin': self.endpoint}
+        p.update(self._creds)
 
         if timeout is not None:
             if watch_class is None:
