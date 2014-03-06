@@ -169,6 +169,7 @@ class RPC(object):
 
     def reconnect(self):
         if self.conn:
+            self._auth = False
             self.conn.close()
         if not self._reconnect_params:
             return False
@@ -177,8 +178,8 @@ class RPC(object):
         while True:
             try:
                 self.conn = websocket.create_connection(
-                    self._reconnect_params['endpoint'],
-                    origin=self._reconnect_params['endpoint'])
+                    self._reconnect_params['url'],
+                    origin=self._reconnect_params['origin'])
                 break
             except socket.error as err:
                 if not err.errno in (
@@ -186,7 +187,7 @@ class RPC(object):
                     raise
                 time.sleep(1)
                 continue
-        self.login(**self._reconnect_parms)
+        self.login(**self._reconnect_params)
         return True
 
 
@@ -227,9 +228,14 @@ class Watcher(RPC):
                     raise
                 if not self.reconnect():
                     raise
-                self.start()
                 return self.next()
+            raise
         return result['Deltas']
+
+    def reconnect(self):
+        self.watcher_id = None
+        self.running = False
+        return super(Watcher, self).reconnect()
 
     def stop(self):
         if not self.conn.connected:
@@ -239,6 +245,7 @@ class Watcher(RPC):
             'Request': 'Stop',
             'Id': self.watcher_id})
         self.conn.close()
+        self.watcher_id = None
         self.running = False
         return result
 
@@ -514,8 +521,6 @@ class Environment(RPC):
 
         p = dict(self._creds)
         p.update({'url': self.endpoint, 'origin': self.endpoint})
-        watch_env.set_reconnect_params(p)
-
         if timeout is not None:
             if watch_class is None:
                 watch_class = TimeoutWatcher
@@ -525,6 +530,7 @@ class Environment(RPC):
             if watch_class is None:
                 watch_class = Watcher
             watcher = watch_class(watch_env.conn)
+        watcher.set_reconnect_params(p)
         self._watches.append(watcher)
         watcher.start()
         return watcher
