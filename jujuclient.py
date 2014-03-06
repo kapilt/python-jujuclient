@@ -52,10 +52,13 @@ Upstream/Server
 from base64 import b64encode
 from contextlib import contextmanager
 
+import errno
 import httplib
 import json
 import pprint
+import time
 import signal
+import socket
 import StringIO
 import logging
 import websocket
@@ -125,6 +128,8 @@ class RPC(object):
     _auth = False
     _request_id = 0
     _debug = False
+    _reconnect_params = None
+    conn = None
 
     def _rpc(self, op):
         if not self._auth and not op.get("Request") == "Login":
@@ -142,7 +147,6 @@ class RPC(object):
             log.debug("rpc response:\n%s" % (json.dumps(result, indent=2)))
 
         if 'Error' in result:
-            # print "raw", op['Request'], raw
             # The backend disconnects us on err, bug: http://pad.lv/1160971
             self.conn.connected = False
             raise EnvError(result)
@@ -159,6 +163,31 @@ class RPC(object):
              "Params": {"AuthTag": user, "Password": password}})
         self._auth = True
         return result
+
+    def set_reconnect_params(self, params):
+        self._reconnect_params = params
+
+    def reconnect(self):
+        if self.conn:
+            self.conn.close()
+        if not self._reconnect_params:
+            return False
+
+        log.info("Reconnecting client")
+        while True:
+            try:
+                self.conn = websocket.create_connection(
+                    self._reconnect_params['endpoint'],
+                    origin=self._reconnect_params['endpoint'])
+                break
+            except socket.error as err:
+                if not err.errno in (
+                        errno.ETIMEDOUT, errno.ECONNREFUSED, errno.ECONNRESET):
+                    raise
+                time.sleep(1)
+                continue
+        self.login(**self._reconnect_parms)
+        return True
 
 
 class Watcher(RPC):
@@ -196,8 +225,9 @@ class Watcher(RPC):
             if "state watcher was stopped" in e.message:
                 if not self.auto_reconnect:
                     raise
-                if not self._reconnect():
+                if not self.reconnect():
                     raise
+                self.start()
                 return self.next()
         return result['Deltas']
 
@@ -214,17 +244,6 @@ class Watcher(RPC):
 
     def set_context(self, context):
         self.context = context
-        return self
-
-    def _reconnect(self):
-        self.conn.close()
-        params = getattr(
-            self.conn, 'reconnect_params', None)
-        if not params:
-            return False
-        self.conn.connect(**params)
-        self.login(**params)
-        self.start()
         return self
 
     def __iter__(self):
@@ -493,10 +512,9 @@ class Environment(RPC):
         else:
             watch_env = connection
 
-        watch_env.conn.reconnect_params = p = {
-            'url': self.endpoint,
-            'origin': self.endpoint}
-        p.update(self._creds)
+        p = dict(self._creds)
+        p.update({'url': self.endpoint, 'origin': self.endpoint})
+        watch_env.set_reconnect_params(p)
 
         if timeout is not None:
             if watch_class is None:
