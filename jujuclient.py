@@ -240,10 +240,13 @@ class Watcher(RPC):
     def stop(self):
         if not self.conn.connected:
             return
-        result = self._rpc({
-            'Type': 'AllWatcher',
-            'Request': 'Stop',
-            'Id': self.watcher_id})
+        try:
+            result = self._rpc({
+                'Type': 'AllWatcher', 'Request': 'Stop',
+                'Id': self.watcher_id})
+        except (EnvError, socket.error):
+            # We're about to close the connection.
+            result = None
         self.conn.close()
         self.watcher_id = None
         self.running = False
