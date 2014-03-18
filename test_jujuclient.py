@@ -6,7 +6,7 @@ ENDPOINT = os.environ.get("JUJU_ENDPOINT")
 AUTH = os.environ.get("JUJU_AUTH")
 
 
-class ClientFuncTest(unittest.TestCase):
+class ClientFunctionalTest(unittest.TestCase):
 
     def setUp(self):
         self.client = Environment(ENDPOINT)
@@ -15,18 +15,6 @@ class ClientFuncTest(unittest.TestCase):
     def tearDown(self):
         self.client.close()
         self.client = None
-
-    def test_juju_info(self):
-        self.assertEqual(
-            self.client.info(),
-            {'DefaultSeries': 'precise',
-             'Name': 'iaas-stage',
-             'ProviderType': 'ec2'})
-
-    def test_deploy_and_destroy(self):
-        self.assert_not_service('db')
-        self.client.deploy('db', 'precise/mysql')
-        self.assert_service('db')
 
     def assert_service(self, svc_name):
         status = self.client.status()
@@ -37,6 +25,16 @@ class ClientFuncTest(unittest.TestCase):
         status = self.client.status()
         self.assertTrue(svc_name not in [
             svc.get('Name') for svc in status.get('Services', ())])
+
+    def test_juju_info(self):
+        self.assertEqual(
+            self.client.info().keys(),
+            ['DefaultSeries', 'Name', 'ProviderType'])
+
+    def test_deploy_and_destroy(self):
+        self.assert_not_service('db')
+        self.client.deploy('db', 'precise/mysql')
+        self.assert_service('db')
 
     def test_expose_unexpose(self):
         pass
