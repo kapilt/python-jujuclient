@@ -39,28 +39,25 @@ Todo
 - Provide a buffered in mem option with watches on a single conn.
 
 Upstream/Server
-  - need proper status output, or other introspection beyond AllWatcher
-  - deploy local charm
   - bad constraints fail silently
-
-  - need terminate machine api
-  - clarify usage/working of env annotation
+  - need proper charm api
+  -
 """
 # License: GPLv3
 # Author: Kapil Thangavelu <kapil.foss@gmail.com>
 
 from base64 import b64encode
 from contextlib import contextmanager
-
 import errno
 import httplib
 import json
+import logging
+import os
 import pprint
-import time
 import signal
 import socket
 import StringIO
-import logging
+import time
 import websocket
 
 # There are two pypi modules with the name websocket (python-websocket
@@ -301,7 +298,7 @@ class TimeoutWatcher(Watcher):
 
 class Environment(RPC):
 
-    def __init__(self, endpoint, conn=None):
+    def __init__(self, endpoint, conn=None, ca_cert=None):
         self.endpoint = endpoint
         self._watches = []
         # For watches.
@@ -318,6 +315,26 @@ class Environment(RPC):
             w.stop()
         if self.conn.connected:
             self.conn.close()
+
+    @classmethod
+    def connect(cls, env_name):
+        import yaml
+        jhome = os.path.expanduser(
+            os.environ.get('JUJU_HOME', '~/.juju'))
+        jenv = os.path.join(jhome, 'environments', '%s.jenv' % env_name)
+        if not os.path.exists(jenv):
+            raise ValueError("Environment %s not bootstrapped" % env_name)
+        with open(jenv) as fh:
+            data = yaml.safe_load(fh.read())
+            cert_path = os.path.join(jhome, '%s.ca')
+            with open(cert_path, 'w') as ca_fh:
+                ca_fh.write(data['ca-cert'])
+        env = cls(
+            "wss://%s" % data['state-servers'][0],
+            ca_cert=cert_path)
+        env.login(user="user-%s" % data['user'],
+                  password=data['password'])
+        return env
 
     # Charm ops
     def add_local_charm(self, charm_file, series, size=None):
@@ -358,9 +375,7 @@ class Environment(RPC):
             "Request": "EnvironmentInfo"})
 
     def status(self):
-        # Status via api is currently broken, only reports machine ids,
-        # use an all watch with status translator to get something usable.
-        return self._rpc({"Type": "Client", "Request": "Status"})
+        return self._rpc({"Type": "Client", "Request": "FullStatus"})
 
     def get_charm(self, charm_url):
         return self._rpc(
@@ -948,6 +963,8 @@ class StatusTranslator(object):
                         'relations', {})
             svc_rels.setdefault(
                 ep['Relation']['Name'], []).append(ep['RemoteService'])
+
+
 
 
 def main():
