@@ -962,12 +962,9 @@ class StatusTranslator(object):
         for ep in d['Endpoints']:
             svc_rels = self.data.setdefault(
                 'services', {}).setdefault(
-                    ep['ServiceName'], {}).setdefault(
-                        'relations', {})
+                    ep['ServiceName'], {}).setdefault('relations', {})
             svc_rels.setdefault(
                 ep['Relation']['Name'], []).append(ep['RemoteService'])
-
-
 
 
 def main():
