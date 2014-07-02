@@ -56,6 +56,7 @@ import os
 import pprint
 import signal
 import socket
+import ssl
 import StringIO
 import time
 import websocket
@@ -176,7 +177,8 @@ class RPC(object):
             try:
                 self.conn = websocket.create_connection(
                     self._reconnect_params['url'],
-                    origin=self._reconnect_params['origin'])
+                    origin=self._reconnect_params['origin'],
+                    sslopt={'ssl_version': ssl.PROTOCOL_TLSv1})
                 break
             except socket.error as err:
                 if not err.errno in (
@@ -308,7 +310,8 @@ class Environment(RPC):
             self.conn = conn
         else:
             self.conn = websocket.create_connection(
-                endpoint, origin=self.endpoint)
+                endpoint, origin=self.endpoint,
+                sslopt={'ssl_version': ssl.PROTOCOL_TLSv1})
 
     def close(self):
         for w in self._watches:
@@ -959,12 +962,9 @@ class StatusTranslator(object):
         for ep in d['Endpoints']:
             svc_rels = self.data.setdefault(
                 'services', {}).setdefault(
-                    ep['ServiceName'], {}).setdefault(
-                        'relations', {})
+                    ep['ServiceName'], {}).setdefault('relations', {})
             svc_rels.setdefault(
                 ep['Relation']['Name'], []).append(ep['RemoteService'])
-
-
 
 
 def main():

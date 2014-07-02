@@ -1,4 +1,5 @@
 import unittest
+import time
 import os
 from jujuclient import Environment
 
@@ -18,23 +19,32 @@ class ClientFunctionalTest(unittest.TestCase):
 
     def assert_service(self, svc_name):
         status = self.client.status()
-        self.assertTrue(svc_name in [
-            svc.get('Name') for svc in status.get('Services', ())])
+        services = status.get('Services', {})
+        self.assertTrue(
+            svc_name in services,
+            "Service {} does not exist".format(svc_name)
+        )
 
     def assert_not_service(self, svc_name):
         status = self.client.status()
-        self.assertTrue(svc_name not in [
-            svc.get('Name') for svc in status.get('Services', ())])
+        services = status.get('Services', {})
+        self.assertFalse(
+            svc_name in services,
+            "Service {} exists".format(svc_name)
+        )
 
     def test_juju_info(self):
         self.assertEqual(
-            self.client.info().keys(),
-            ['DefaultSeries', 'Name', 'ProviderType'])
+            sorted(self.client.info().keys()),
+            ['DefaultSeries', 'Name', 'ProviderType', 'UUID'])
 
     def test_deploy_and_destroy(self):
         self.assert_not_service('db')
-        self.client.deploy('db', 'precise/mysql')
+        self.client.deploy('db', 'precise/mysql-46')
         self.assert_service('db')
+        self.client.destroy_service('db')
+        time.sleep(4)
+        self.assert_not_service('db')
 
     def test_expose_unexpose(self):
         pass
