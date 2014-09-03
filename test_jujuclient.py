@@ -1,16 +1,61 @@
-import unittest
+import errno
+import mock
 import os
-from jujuclient import Environment
+import socket
+import ssl
+import unittest
 
+
+from jujuclient import Environment, Connector
+
+# Must set either both of these
 ENDPOINT = os.environ.get("JUJU_ENDPOINT")
 AUTH = os.environ.get("JUJU_AUTH")
+# OR set this one
+ENV_NAME = os.environ.get("JUJU_TEST_ENV")
+
+
+if not (ENDPOINT and AUTH) and not ENV_NAME:
+    print ENDPOINT, AUTH
+    print ENV_NAME
+    raise ValueError("No Testing Environment Defined.")
+
+
+class ClientConnectorTest(unittest.TestCase):
+
+    @mock.patch('jujuclient.websocket')
+    def test_connect_socket(self, websocket):
+        address = "wss://abc:17070"
+        Connector.connect_socket(address)
+        websocket.create_connection.assert_called_once_with(
+            address, origin=address, sslopt={
+                'ssl_version': ssl.PROTOCOL_TLSv1,
+                'cert_reqs': ssl.CERT_NONE})
+
+    @mock.patch('socket.create_connection')
+    def test_is_server_available_unknown_error(self, connect_socket):
+        connect_socket.side_effect = ValueError()
+        self.assertRaises(
+            ValueError, Connector().is_server_available,
+            'foo.example.com:7070')
+
+    @mock.patch('socket.create_connection')
+    def test_is_server_available_known_error(self, connect_socket):
+        e = socket.error()
+        e.errno = errno.ETIMEDOUT
+        connect_socket.side_effect = e
+        self.assertFalse(
+            Connector().is_server_available("foo.example.com:7070"))
 
 
 class ClientFunctionalTest(unittest.TestCase):
 
     def setUp(self):
-        self.client = Environment(ENDPOINT)
-        self.client.login(AUTH)
+        if ENV_NAME:
+            self.client = Environment.connect(ENV_NAME)
+        else:
+            self.client = Environment(ENDPOINT)
+            self.client.login(AUTH)
 
     def tearDown(self):
         self.client.close()
@@ -43,28 +88,28 @@ class ClientFunctionalTest(unittest.TestCase):
         self.client.destroy_service('db')
         self.assert_not_service('db')
 
-    def test_expose_unexpose(self):
+    def xtest_expose_unexpose(self):
         pass
 
-    def test_add_remove_units(self):
+    def xtest_add_remove_units(self):
         pass
 
-    def test_get_set_config(self):
+    def xtest_get_set_config(self):
         pass
 
-    def test_get_set_constraints(self):
+    def xtest_get_set_constraints(self):
         pass
 
-    def test_get_set_annotations(self):
+    def xtest_get_set_annotations(self):
         pass
 
-    def test_add_remove_relation(self):
+    def xtest_add_remove_relation(self):
         pass
 
-    def test_status(self):
+    def xtest_status(self):
         pass
 
-    def test_info(self):
+    def xtest_info(self):
         pass
 
 

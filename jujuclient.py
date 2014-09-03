@@ -2,8 +2,6 @@
 Juju Client
 -----------
 
-Seriously Alpha. Works now, but API *will* change.
-
 A simple synchronous python client for the juju-core websocket api.
 
 Example Usage::
@@ -71,6 +69,9 @@ except AttributeError:
         "Expected 'python-websocket' egg "
         "found incompatible gevent 'websocket' egg")
 
+
+# We need a new release of python-websocket 0.18 to make this work
+CERT_CHECK_ENABLED = False
 
 websocket.logger = logging.getLogger("websocket")
 
@@ -173,19 +174,9 @@ class RPC(object):
             return False
 
         log.info("Reconnecting client")
-        while True:
-            try:
-                self.conn = websocket.create_connection(
-                    self._reconnect_params['url'],
-                    origin=self._reconnect_params['origin'],
-                    sslopt={'ssl_version': ssl.PROTOCOL_TLSv1})
-                break
-            except socket.error as err:
-                if not err.errno in (
-                        errno.ETIMEDOUT, errno.ECONNREFUSED, errno.ECONNRESET):
-                    raise
-                time.sleep(1)
-                continue
+        self.conn = Connector.connect_socket_loop(
+            self._reconnect_params['url'],
+            self._reconnect_params['ca_cert'])
         self.login(**self._reconnect_params)
         return True
 
@@ -298,6 +289,107 @@ class TimeoutWatcher(Watcher):
         raise TimeoutError()
 
 
+class Connector(object):
+    """Abstract out the details of connecting to state servers.
+
+    Covers
+    - finding state servers, credentials, certs for a named env.
+    - verifying state servers are listening
+    - connecting an environment or websocket to a state server.
+    """
+
+    retry_conn_errors = (errno.ETIMEDOUT, errno.ECONNREFUSED, errno.ECONNRESET)
+
+    def run(self, cls, env_name):
+        """Given an environment name, return an authenticated client to it."""
+        jhome, data = self.parse_env(env_name)
+        cert_path = self.write_ca(jhome, env_name, data)
+        address = self.get_state_server(data)
+        if not address:
+            return
+        return self.connect_env(
+            cls, address, data['user'], data['password'], cert_path)
+
+    def connect_env(self, cls, address, user, password, cert_path=None):
+        """Given environment info return an authenticated client to it."""
+        env = cls("wss://%s" % address, ca_cert=cert_path)
+        env.login(user="user-%s" % user, password=password)
+        return env
+
+    @classmethod
+    def connect_socket(cls, endpoint, cert_path=None):
+        """Return a websocket connection to an endpoint."""
+        sslopt = {'ssl_version': ssl.PROTOCOL_TLSv1}
+        if cert_path and CERT_CHECK_ENABLED:
+            sslopt['ca_certs'] = cert_path
+            # ssl.match_hostname is broken for us, need to disable per
+            # https://github.com/liris/websocket-client/issues/105
+            # when that's available, we can just selectively disable
+            # the host name match, for now we have to disable cert
+            # checking :-(
+            sslopt['check_hostname'] = False
+        else:
+            sslopt['cert_reqs'] = ssl.CERT_NONE
+
+        return websocket.create_connection(
+            endpoint, origin=endpoint, sslopt=sslopt)
+
+    def connect_socket_loop(self, endpoint, cert_path=None, timeout=120):
+        """Retry websocket connections to an endpoint till its connected."""
+        t = time.time()
+        while (time.time() > t + timeout):
+            try:
+                self.conn = Connector.connect_socket(endpoint, cert_path)
+                break
+            except socket.error as err:
+                if not err.errno in self.retry_conn_errors:
+                    raise
+                time.sleep(1)
+                continue
+
+    def write_ca(self, cert_dir, cert_name, data):
+        """Write ssl ca to the given."""
+        cert_path = os.path.join(cert_dir, '%s-cacert.pem' % cert_name)
+        with open(cert_path, 'w') as ca_fh:
+            ca_fh.write(data['ca-cert'])
+        return cert_path
+
+    def get_state_server(self, data):
+        """Given a list of state servers, return one that's listening."""
+        found = False
+        for s in data['state-servers']:
+            if self.is_server_available(s):
+                found = True
+                break
+        if not found:
+            return
+        return s
+
+    def parse_env(self, env_name):
+        import yaml
+        jhome = os.path.expanduser(
+            os.environ.get('JUJU_HOME', '~/.juju'))
+        jenv = os.path.join(jhome, 'environments', '%s.jenv' % env_name)
+        if not os.path.exists(jenv):
+            raise ValueError("Environment %s not bootstrapped" % env_name)
+
+        with open(jenv) as fh:
+            data = yaml.safe_load(fh.read())
+            return jhome, data
+
+    def is_server_available(self, server):
+        """ Given address/port, return true/false if it's up """
+        address, port = server.split(":")
+        try:
+            socket.create_connection((address, port), 3)
+            return True
+        except socket.error as err:
+            if err.errno in self.retry_conn_errors:
+                return False
+            else:
+                raise
+
+
 class Environment(RPC):
 
     def __init__(self, endpoint, conn=None, ca_cert=None):
@@ -305,13 +397,12 @@ class Environment(RPC):
         self._watches = []
         # For watches.
         self._creds = None
+        self._ca_cert = ca_cert
 
         if conn is not None:
             self.conn = conn
         else:
-            self.conn = websocket.create_connection(
-                endpoint, origin=self.endpoint,
-                sslopt={'ssl_version': ssl.PROTOCOL_TLSv1})
+            self.conn = Connector.connect_socket(endpoint, self._ca_cert)
 
     def close(self):
         for w in self._watches:
@@ -321,23 +412,7 @@ class Environment(RPC):
 
     @classmethod
     def connect(cls, env_name):
-        import yaml
-        jhome = os.path.expanduser(
-            os.environ.get('JUJU_HOME', '~/.juju'))
-        jenv = os.path.join(jhome, 'environments', '%s.jenv' % env_name)
-        if not os.path.exists(jenv):
-            raise ValueError("Environment %s not bootstrapped" % env_name)
-        with open(jenv) as fh:
-            data = yaml.safe_load(fh.read())
-            cert_path = os.path.join(jhome, '%s.ca')
-            with open(cert_path, 'w') as ca_fh:
-                ca_fh.write(data['ca-cert'])
-        env = cls(
-            "wss://%s" % data['state-servers'][0],
-            ca_cert=cert_path)
-        env.login(user="user-%s" % data['user'],
-                  password=data['password'])
-        return env
+        return Connector().run(cls, env_name)
 
     # Charm ops
     def add_local_charm(self, charm_file, series, size=None):
@@ -377,8 +452,13 @@ class Environment(RPC):
             "Type": "Client",
             "Request": "EnvironmentInfo"})
 
-    def status(self):
-        return self._rpc({"Type": "Client", "Request": "FullStatus"})
+    def status(self, filters=None):
+        if isinstance(filters, basestring):
+            filters = [filters]
+        op = {"Type": "Client", "Request": "FullStatus"}
+        if filters:
+            op["Params"] = {'Patterns': filters}
+        return self._rpc(op)
 
     def get_charm(self, charm_url):
         return self._rpc(
@@ -507,6 +587,14 @@ class Environment(RPC):
                 "Series": series,
                 "Arch": arch}})
 
+    def retry_provisioning(self, machines):
+        """Mark machines for provisioner to retry iaas provisioning."""
+        return self._rpc({
+            "Type": "Client",
+            "Request": "RetryProvisioning",
+            "Params": {
+                "Entities": map(lambda x: {"Tag": "machine-%s"}, machines)}})
+
     # Watch Wrapper methods
     def get_stat(self):
         """A status emulator using the watch api, returns immediately.
@@ -541,7 +629,10 @@ class Environment(RPC):
             watch_env = connection
 
         p = dict(self._creds)
-        p.update({'url': self.endpoint, 'origin': self.endpoint})
+        p.update({
+            'url': self.endpoint,
+            'origin': self.endpoint,
+            'ca_cert': self.ca_cert})
         if timeout is not None:
             if watch_class is None:
                 watch_class = TimeoutWatcher
@@ -683,7 +774,7 @@ class Environment(RPC):
         """Update a service.
 
         Can update a service's charm, modify configuration, constraints,
-        and the number of units.
+        and the minimum number of units.
         """
         svc_config = {}
         if settings:
@@ -691,7 +782,7 @@ class Environment(RPC):
 
         return self._rpc(
             {"Type": "Client",
-             "Request": "SetServiceConstraints",
+             "Request": "ServiceUpdate",
              "Params": {
                  "ServiceName": service_name,
                  "CharmUrl": charm_url,
