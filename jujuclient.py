@@ -339,8 +339,7 @@ class Connector(object):
         t = time.time()
         while (time.time() > t + timeout):
             try:
-                self.conn = Connector.connect_socket(endpoint, cert_path)
-                break
+                return Connector.connect_socket(endpoint, cert_path)
             except socket.error as err:
                 if not err.errno in self.retry_conn_errors:
                     raise
