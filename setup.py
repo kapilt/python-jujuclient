@@ -12,7 +12,6 @@ setup(
     author_email="kapil.foss@gmail.com",
     url="http://juju.ubuntu.com",
     install_requires=["websocket-client"],
-    test_requires=["mock"],
     classifiers=[
         "Development Status :: 4 - Beta",
         "Programming Language :: Python",
