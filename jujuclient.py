@@ -70,9 +70,6 @@ except AttributeError:
         "found incompatible gevent 'websocket' egg")
 
 
-# We need a new release of python-websocket 0.18 to make this work
-CERT_CHECK_ENABLED = False
-
 websocket.logger = logging.getLogger("websocket")
 
 log = logging.getLogger("jujuclient")
@@ -320,7 +317,7 @@ class Connector(object):
     def connect_socket(cls, endpoint, cert_path=None):
         """Return a websocket connection to an endpoint."""
         sslopt = {'ssl_version': ssl.PROTOCOL_TLSv1}
-        if cert_path and CERT_CHECK_ENABLED:
+        if cert_path:
             sslopt['ca_certs'] = cert_path
             # ssl.match_hostname is broken for us, need to disable per
             # https://github.com/liris/websocket-client/issues/105
@@ -631,7 +628,7 @@ class Environment(RPC):
         p.update({
             'url': self.endpoint,
             'origin': self.endpoint,
-            'ca_cert': self.ca_cert})
+            'ca_cert': self._ca_cert})
         if timeout is not None:
             if watch_class is None:
                 watch_class = TimeoutWatcher
