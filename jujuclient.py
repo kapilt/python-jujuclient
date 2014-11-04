@@ -279,6 +279,7 @@ class TimeoutWatcher(Watcher):
             signal.alarm(timeout)
             yield None
         finally:
+            signal.alarm(0)
             signal.signal(signal.SIGALRM, signal.SIG_DFL)
 
     @classmethod
