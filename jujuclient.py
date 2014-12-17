@@ -47,7 +47,6 @@ Upstream/Server
 from base64 import b64encode
 from contextlib import contextmanager
 import errno
-import httplib
 import json
 import logging
 import os
@@ -55,9 +54,17 @@ import pprint
 import signal
 import socket
 import ssl
-import StringIO
 import time
 import websocket
+import collections
+
+try:
+    from httplib import HTTPSConnection
+    import StringIO
+except ImportError:
+    from http.client import HTTPSConnection
+    from io import StringIO
+
 
 # There are two pypi modules with the name websocket (python-websocket
 # and websocket) We utilize python-websocket, sniff and error if we
@@ -107,7 +114,7 @@ class EnvError(Exception):
         super(EnvError, self).__init__(error)
 
     def __str__(self):
-        stream = StringIO.StringIO()
+        stream = StringIO()
         pprint.pprint(self.error, stream, indent=4)
         return "<Env Error - Details:\n %s >" % (
             stream.getvalue())
@@ -199,7 +206,7 @@ class Watcher(RPC):
         self.running = True
         return result
 
-    def next(self):
+    def __next__(self):
         if self.watcher_id is None:
             self.start()
         if not self.running:
@@ -209,13 +216,13 @@ class Watcher(RPC):
                 'Type': 'AllWatcher',
                 'Request': 'Next',
                 'Id': self.watcher_id})
-        except EnvError, e:
+        except EnvError as e:
             if "state watcher was stopped" in e.message:
                 if not self.auto_reconnect:
                     raise
                 if not self.reconnect():
                     raise
-                return self.next()
+                return next(self)
             raise
         return result['Deltas']
 
@@ -261,16 +268,16 @@ class TimeoutWatcher(Watcher):
     def set_timeout(self, timeout):
         self._timeout = timeout
 
-    def next(self):
+    def __next__(self):
         with self._set_alarm(self._timeout):
-            return super(TimeoutWatcher, self).next()
+            return next(super(TimeoutWatcher, self))
 
     @classmethod
     @contextmanager
     def _set_alarm(cls, timeout):
         try:
             handler = signal.getsignal(signal.SIGALRM)
-            if callable(handler):
+            if isinstance(handler, collections.Callable):
                 if handler.__name__ == '_set_alarm':
                     raise TimeoutWatchInProgress()
                 raise RuntimeError(
@@ -419,7 +426,7 @@ class Environment(RPC):
         """
         endpoint = self.endpoint.replace('wss://', '')
         host, port = endpoint.split(':')
-        conn = httplib.HTTPSConnection(host, port)
+        conn = HTTPSConnection(host, port)
         path = "/charms?series=%s" % (series)
         headers = {
             'Content-Type': 'application/zip',
@@ -449,7 +456,7 @@ class Environment(RPC):
             "Request": "EnvironmentInfo"})
 
     def status(self, filters=None):
-        if isinstance(filters, basestring):
+        if isinstance(filters, str):
             filters = [filters]
         op = {"Type": "Client", "Request": "FullStatus"}
         if filters:
@@ -589,7 +596,7 @@ class Environment(RPC):
             "Type": "Client",
             "Request": "RetryProvisioning",
             "Params": {
-                "Entities": map(lambda x: {"Tag": "machine-%s"}, machines)}})
+                "Entities": [{"Tag": "machine-%s"} for x in machines]}})
 
     # Watch Wrapper methods
     def get_stat(self):
@@ -647,7 +654,7 @@ class Environment(RPC):
 
     def _prepare_strparams(self, d):
         r = {}
-        for k, v in d.items():
+        for k, v in list(d.items()):
             r[k] = str(v)
         return r
 
@@ -899,7 +906,7 @@ class WatchWrapper(object):
             for change_set in self.watch:
                 for change in change_set:
                     self.process(*change)
-                    if seen_initial and callable(callback):
+                    if seen_initial and isinstance(callback, collections.Callable):
                         callback(*change)
                 if self.complete() is True:
                     self.watch.stop()
@@ -933,7 +940,7 @@ class WaitForUnits(WatchWrapper):
 
     def complete(self):
         state = {'pending': [], 'errors': []}
-        for k, v in self.units.items():
+        for k, v in list(self.units.items()):
             if v['Status'] == "error":
                 state['errors'] = [v]
             elif v['Status'] != self.goal_state:
@@ -963,7 +970,7 @@ class WaitForNoMachines(WatchWrapper):
             self.machines[data['Id']] = data
 
     def complete(self):
-        if self.machines.keys() == ['0']:
+        if list(self.machines.keys()) == ['0']:
             return True
 
 
@@ -988,7 +995,7 @@ class StatusTranslator(object):
     def run(self, watch):
         self.data = {'machines': {}, 'services': {}}
         with watch:
-            change_set = watch.next()
+            change_set = next(watch)
             for change in change_set:
                 entity_type, change_kind, d = change
                 if entity_type == "machine":
@@ -1005,7 +1012,7 @@ class StatusTranslator(object):
 
     def _translate(self, d):
         r = {}
-        for k, v in d.items():
+        for k, v in list(d.items()):
             if k in self.remove_keys:
                 continue
             if k in self.skip_empty_keys and not v:
@@ -1066,21 +1073,21 @@ def main():
     env.login(juju_token)
     watcher = env.get_watch(timeout=3)
 
-    print "Env info", env.info()
+    print("Env info", env.info())
 
     for change_set in watcher:
         for change in change_set:
-            print "state change", change
+            print("state change", change)
 
     env.deploy("test-blog", "cs:wordpress")
     env.deploy("test-db", "cs:mysql")
     env.add_relation("test-db", "test-blog")
 
-    print "waiting for changes for 30s"
+    print("waiting for changes for 30s")
     watcher.set_timeout(30)
     for change_set in watcher:
         for change in change_set:
-            print "state change", change
+            print("state change", change)
 
     env.destroy_service('test-blog')
     env.destroy_service('test-db')
