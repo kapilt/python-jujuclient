@@ -6,7 +6,7 @@ Python client for juju-core websocket api.
 
 setup(
     name="jujuclient",
-    version="0.18.4",
+    version="0.18.5",
     description="A juju-core/gojuju simple synchronous python api client.",
     author="Kapil Thangavelu",
     author_email="kapil.foss@gmail.com",
