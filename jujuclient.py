@@ -75,6 +75,15 @@ websocket.logger = logging.getLogger("websocket")
 log = logging.getLogger("jujuclient")
 
 
+class EnvironmentNotBootstrapped(Exception):
+
+    def __init__(self, environment):
+        self.environment = environment
+
+    def __str__(self):
+        return "Environment %s is not bootstrapped" % self.environment
+
+
 class AlreadyConnected(Exception):
     pass
 
@@ -368,7 +377,7 @@ class Connector(object):
             os.environ.get('JUJU_HOME', '~/.juju'))
         jenv = os.path.join(jhome, 'environments', '%s.jenv' % env_name)
         if not os.path.exists(jenv):
-            raise ValueError("Environment %s not bootstrapped" % env_name)
+            raise EnvironmentNotBootstrapped(env_name)
 
         with open(jenv) as fh:
             data = yaml.safe_load(fh.read())
