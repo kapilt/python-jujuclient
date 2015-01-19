@@ -16,8 +16,8 @@ ENV_NAME = os.environ.get("JUJU_TEST_ENV")
 
 
 if not (ENDPOINT and AUTH) and not ENV_NAME:
-    print ENDPOINT, AUTH
-    print ENV_NAME
+    print(ENDPOINT, AUTH)
+    print(ENV_NAME)
     raise ValueError("No Testing Environment Defined.")
 
 
