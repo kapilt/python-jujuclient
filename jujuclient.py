@@ -888,7 +888,7 @@ class Environment(RPC):
                 "Tag": "%s-%s" % (entity_type, entity.replace("/", "-"))}})
 
 
-# Unit tests for the watch wrappers are in lp:juju-deployer/darwin
+# Unit tests for the watch wrappers are in lp:juju-deployer...
 class WatchWrapper(object):
 
     def __init__(self, watch):
