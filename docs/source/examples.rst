@@ -43,7 +43,7 @@ we can verify that our env has that via::
    True
 
    
-Scaling a servic
+Scaling a service
 +++++++++++++++++
 
 If we're deploying a cloud service chances are we'd like to scale
