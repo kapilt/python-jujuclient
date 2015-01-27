@@ -7,3 +7,4 @@ local
 man
 jujuclient.egg-info
 share
+.venv3
