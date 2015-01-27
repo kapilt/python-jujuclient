@@ -9,7 +9,7 @@ It has high fidelity coverage of the juju-core api, including the various
 facade api extensions.
 
 Installation
-============
+++++++++++++
 
 Either via packages (see juju-stable/ppa) ala::
 
@@ -23,23 +23,24 @@ or via python packages::
 
 
 Connecting
-==========
+++++++++++
 
- To facilitate simple client usage the easiest way to connect is by named
- environment:
+To facilitate simple client usage the easiest way to connect to an environment
+is via the connect classmethod helper using the environment name::
 
   >>> from jujuclient import Environment
   >>> env = Environment.connect('ocean')
 
 
 Facade Usage
-============
+++++++++++++
 
-Juju provides for multiple apis behind a single endpoint using with
+Juju provides for multiple apis behind a single endpoint with
 different apis segmentations known as 'facades', each facade is
 versioned independently. This client provides for facade auto
-negotiation to best available matching client version and login
-capabilities which are directly annotated on to the env instance.
+negotiation based on login results to provide the best matching client
+version. The facades are directly annotated onto the env/client
+instance.
 
 The extant facades implemented by this client for juju 1.23 are
 Charms, KeyManager, UserManager, HighAvailability, Action, and
