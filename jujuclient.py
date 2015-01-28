@@ -1375,7 +1375,7 @@ class UserManager(APIFacade):
 
         Example::
 
-          >>> um.add({'username': 'mike',
+          >>> env.users.add({'username': 'mike',
                       'display-name': 'Michael Smith',
                       'password': 'zebramoon'})
           {u'results': [{u'tag': u'user-mike@local'}]}
@@ -1409,7 +1409,7 @@ class UserManager(APIFacade):
 
         Example::
 
-          >>> um.list()
+          >>> env.users.list()
           {u'results': [{u'result': {
                 u'username': u'admin',
                 u'last-connection':
@@ -1463,7 +1463,7 @@ class Charms(APIFacade):
 
         Charm url must be fully qualified.
 
-        >>> charms.info('cs:~hazmat/trusty/etcd-6')
+        >>> env.charms.info('cs:~hazmat/trusty/etcd-6')
         """
         return self.rpc({
             "Request": "CharmInfo",
@@ -1472,7 +1472,7 @@ class Charms(APIFacade):
     def list(self, names=()):
         """Retrieve all charms with the given names or all charms.
 
-        >>> charms.list('etcd')
+        >>> env.charms.list('etcd')
 
         """
         if not isinstance(names, (list, tuple)):
@@ -1592,7 +1592,7 @@ class KeyManager(APIFacade):
     def import_keys(self, user, keys):
         """Import env user's keys using ssh-import-id.
 
-        >>> keys.import_keys('admin', 'hazmat')
+        >>> env.keys.import_keys('admin', 'gh:kapilt')
         """
         return self.rpc({
             "Request": "ImportKeys",
@@ -1609,8 +1609,7 @@ class Backups(APIFacade):
         """Create in this client is synchronous. It returns after
         the backup is taken.
 
-        >>> backups = BackupManager(env)
-        >>> backups.create('abc')
+        >>> env.backups.create('abc')
         {u'Machine': u'0',
         u'Version': u'1.23-alpha1.1',
         u'Started': u'2015-01-22T18:05:30.014657514Z',
@@ -1632,7 +1631,7 @@ class Backups(APIFacade):
         """Get info on a given backup. Given all backup info is returned
         on 'list' this method is exposed just for completeness.
 
-        >>> backups.info(
+        >>> env.backups.info(
             ...   "20150122-180530.28d91a3d-b50d-4549-80a1-165fe1cc62db")
         {u'Checksum': u'nDAiKQmhrpiB2W5n/OijqUJtGYE=',
         u'ChecksumFormat': u'SHA-1, base64 encoded',
@@ -1654,7 +1653,7 @@ class Backups(APIFacade):
     def list(self):
         """ List all the backups and their info.
 
-        >>> backups.list()
+        >>> env.backups.list()
         {u'List': [{u'Checksum': u'nDAiKQmhrpiB2W5n/OijqUJtGYE=',
             u'ChecksumFormat': u'SHA-1, base64 encoded',
             u'Environment': u'28d91a3d-b50d-4549-80a1-165fe1cc62db',
@@ -1674,7 +1673,7 @@ class Backups(APIFacade):
 
     def remove(self, backup_id):
         """ Remove the given backup.
-        >>> backups.remove(
+        >>> env.backups.remove(
         ...    '20150122-181136.28d91a3d-b50d-4549-80a1-165fe1cc62db')
         {}
         """
