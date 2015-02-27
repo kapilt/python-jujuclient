@@ -1,3 +1,4 @@
+.bzr
 bin
 build
 dist
@@ -8,5 +9,3 @@ man
 jujuclient.egg-info
 share
 .venv3
-.venv
-.git

@@ -148,7 +148,9 @@ class Connector(object):
         if env_uuid:
             endpoint += "/environment/%s/api" % env_uuid
         env = cls(endpoint, name=name, ca_cert=cert_path, env_uuid=env_uuid)
-        env.login(user="user-%s" % user, password=password)
+        if not user.startswith('user-'):
+            user = "user-%s" % user
+        env.login(user=user, password=password)
         return env
 
     @classmethod
@@ -399,7 +401,7 @@ class TimeoutWatcher(Watcher):
 
     def next(self):
         with self._set_alarm(self._timeout):
-            return next(super(TimeoutWatcher, self))
+            return super(TimeoutWatcher, self).next()
 
     # py3 compat
     __next__ = next
@@ -2045,8 +2047,10 @@ class StatusTranslator(object):
         name = d.pop('Name')
         ports = d.pop('Ports')
         tports = d.setdefault('Ports', [])
-        for p in ports:
-            tports.append("%s/%s" % (p['Number'], p['Protocol']))
+        # Workaround for lp:1425435
+        if ports:
+            for p in ports:
+                tports.append("%s/%s" % (p['Number'], p['Protocol']))
         svc_units[name] = self._translate(d)
 
     def _service(self, d):
